@@ -1,0 +1,223 @@
+#!/bin/bash
+
+[[ $1 = --help ]] && exec echo "Virtual webcam media player. Use -v to get verbose output."
+[[ $1 = -v ]] && exec 3>&2 || exec 3>/dev/null
+
+# 16:9
+w=960
+h=540
+fps=30
+
+# ffmpeg video output settings
+flags=(-nostdin)  # allow run in background
+flags+=(-s $w:$h)
+flags+=(-r $fps)
+flags+=(-f v4l2 -vcodec rawvideo -pix_fmt yuv420p)
+flags+=(-vf "scale=w=$w:h=$h:force_original_aspect_ratio=1,pad=$w:$h:(ow-iw)/2:(oh-ih)/2:black")  # filter: scale to fit
+
+
+set_dir()
+{
+    new="$(zenity --file-selection --directory "$dir")"
+    [[ $new ]] && dir="$new"
+}
+
+
+set_cam()  # Args: VARIABLE MESSAGE
+{
+    # Get contents of variable $1
+    current="$(eval "echo \"\$$1\"")"
+
+    items=()
+    for device in DISABLED /dev/video*; do
+        # Preselect the current device
+        [[ $device = "$current" ]] && items+=(true) || items+=(false)
+        [[ $device = DISABLED ]] && items+=("DISABLED" "No camera") && continue
+        [[ -c $device ]] || continue
+        items+=("$device")
+        # Get camera name
+        items+=("$(v4l2-ctl -Dd "$device" | sed -En 's/^[\t ]*Card type[\t ]*: (.*)/\1/p')")
+    done
+    new="$(zenity --list --width 400 --height 300 --text="$2" \
+                  --column={bool,dev,name} --radiolist --hide-header "${items[@]}")"
+    # Save changes to variable $1
+    # Returns true if changed
+    [[ $new ]] && eval "$1=\"$new\""
+}
+
+
+set_mic()
+{
+    items=()
+    # Get ALSA device names
+    for device in DISABLED $(pacmd list-sources | sed -En 's/^[\t ]*name: <(.*)>/\1/p'); do
+        # Preselect the current device
+        [[ $device = "$mic" ]] && items+=(true) || items+=(false)
+        [[ $device = DISABLED ]] && items+=(DISABLED "No microphone") && continue
+        items+=("$device")
+        # Get input device description
+        # between "name: <device>" and then next "name:", search for "device.description"
+        items+=("$(pacmd list-sources | sed -En "/^[\t ]*name: <$device>/,/^[\t ]*name:/ s/^[\t ]*device.description = \"(.*)\"/\1/p")")
+    done
+    new="$(zenity --list --width=400 --height=300 --text="Select microphone" \
+                  --column={bool,device,name} --hide-column=2 --radiolist --hide-header "${items[@]}")"
+    # Returns true if changed
+    [[ $new ]] && mic="$new"
+}
+
+unmute()
+{
+    # Connect real mic to virtual mic
+    [[ $mic_module ]] && return
+    [[ -n $mic && $mic != DISABLED ]] && mic_module="$(pactl load-module module-loopback source="$mic" sink="virt_cam" latency_msec=1)"
+}
+
+mute()
+{
+    # Disconnect mic
+    [[ $mic_module ]] && pactl unload-module "$mic_module"
+    mic_module=
+}
+
+kill_streams()
+{
+    [[ $vpid ]] && kill $vpid 2>/dev/null
+    [[ $apid  ]] && kill $apid 2>/dev/null
+    camera_active=0
+    stream_msg=
+}
+
+
+# Check requirements
+type ffmpeg &>/dev/null || { zenity --error --no-wrap --text "ffmpeg not found"; exit 1; }
+lsmod | grep -q 'v4l2loopback\>' || zenity --warning --no-wrap --text "v4l2loopback driver is not loaded"
+
+
+# Read config
+[[ -f ~/.ffcam ]] && source ~/.ffcam
+# Save the initial values for later
+mic_old="$mic"
+virtual_cam_old="$virtual_cam"
+real_cam_old="$real_cam"
+dir_old="$dir"
+# Remove incorrect values
+[[ $mic = DISABLED ]] || ([[ $mic ]] && pacmd list-sources | grep -q "$mic") || mic=
+[[ $virtual_cam = DISABLED || -c $virtual_cam ]] || virtual_cam=
+[[ $real_cam = DISABLED || -c $real_cam ]] || real_cam=
+[[ -e $dir ]] || dir=
+
+# PulseAudio setup (store a list of module numbers, outputed by pactl)
+modules=($(
+    # mic+media
+    pactl load-module module-null-sink sink_name="virt_cam" sink_properties=device.description="virt_cam"
+    # mic+media => virtual mic
+    pactl load-module module-remap-source master="virt_cam.monitor" source_name="virt_mic" source_properties=device.description="virt_mic"
+    # media
+    pactl load-module module-null-sink sink_name="virt_cam_media" sink_properties=device.description="virt_cam_media"
+    # media -> speakers
+    pactl load-module module-loopback source="virt_cam_media.monitor" latency_msec=1
+    # media -> mic+media
+    pactl load-module module-loopback source="virt_cam_media.monitor" sink="virt_cam" latency_msec=1
+))
+
+# Unload modules and kill all child processes before exiting
+trap 'for m in "${modules[@]}"; do [[ $m ]] && pactl unload-module "$m"; done; mute; kill 0' EXIT
+
+while true; do
+
+    # First run, when have the right settings, we initialize the virtual camera
+    [[ -z $sel && -c $virtual_cam && $initialized != 1 ]] && sel=BLANK && initialized=1
+    
+    # Build a menu
+    if [[ -z $sel ]]; then
+    items=()
+    if [[ -c $virtual_cam ]]; then
+        # The first thing we do
+        ((initialized)) || sel=BLANK
+        
+        # Default actions
+        items=("BLANK" "Stream nothing")
+        [[ -c $real_cam ]] && items+=("CAMERA" "Stream webcam")
+        items+=("" "")
+        
+        # List of directory contents
+        items+=(FOLDER "Folder: $dir")
+        if [[ $dir ]]; then
+            for file in "$dir"/*; do
+                [[ -f $file ]] && items+=("$file" "$(basename "$file")")
+            done
+        fi
+        items+=("" "")
+    fi
+    # Settings
+    items+=(REAL "Webcam: ${real_cam:-NOT SELECTED}"
+            MIC "Mic: ${mic:-NOT SELECTED}"
+            VIRTUAL "Virtual cam: ${virtual_cam:-NOT SELECTED}")
+    
+    sel="$(zenity --list --height=400 --width=400 --title="FFcam" --text="${stream_msg:+Streaming $stream_msg}" --cancel-label="Exit" \
+                  --column={fil,namn} --hide-column=1 --hide-header -- "${items[@]}")" || break
+    
+    fi
+    
+    case "$sel" in
+        '') continue ;;
+
+        FOLDER) set_dir ;;
+
+        # Change mic and reconnect if active
+        MIC) set_mic && [[ $mic_module ]] && { mute; unmute; } ;;
+
+        # Change virtual cam and close streams
+        VIRTUAL) set_cam virtual_cam "Select virtual camera device" && sel=BLANK && continue ;;
+
+        # Change webcam and reconnect if active
+        REAL) set_cam real_cam "Select webcam device" && ((camera_active)) && sel=CAMERA && continue ;;
+
+        BLANK)
+            kill_streams; mute
+            # Send black image
+            # https://video.stackexchange.com/questions/29527/ffmpeg-create-a-black-background-video-from-audio-for-youtube-upload
+            ffmpeg -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            stream_msg="nothing"
+            ;;
+    
+        CAMERA)
+            kill_streams; unmute
+            ffmpeg -i "$real_cam" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            camera_active=1
+            stream_msg="webcam"
+            ;;
+            
+        *.jpg|*.png)
+            kill_streams; unmute
+            ffmpeg -re -loop 1 -i "$sel" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            stream_msg="$(basename "$sel")"
+            ;;
+
+        *.mp3)
+            kill_streams; mute
+            ffmpeg -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            PULSE_SINK="virt_cam_media" ffmpeg -i "$sel" -f pulse 'ffcam' 2>&3 & apid=$!
+            stream_msg="$(basename "$sel")"
+            ;;
+
+        *)
+            kill_streams; mute
+            # https://github.com/umlaeute/v4l2loopback/wiki/FFmpeg
+            # Note: video+audio together with -re creates audio delay and video lag
+            # Two processes, not great solution, but what TODO?
+            ffmpeg -re -i "$sel" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            PULSE_SINK="virt_cam_media" ffmpeg -i "$sel" -f pulse 'ffcam' 2>&3 & apid=$!
+            stream_msg="$(basename "$sel")"
+    esac
+
+    sel=
+    
+done
+
+# Save config (use old values for the undefined)
+[[ $virtual_cam ]] || virtual_cam="$virtual_cam_old"
+[[ $real_cam ]] || real_cam="$real_cam_old"
+[[ $mic ]] || mic="$mic_old"
+[[ $dir ]] || dir="$dir_old"
+declare -p virtual_cam real_cam mic dir > ~/.ffcam
