@@ -121,7 +121,7 @@ modules=($(
 ))
 
 # Unload modules and kill all child processes before exiting
-trap 'for m in "${modules[@]}"; do [[ $m ]] && pactl unload-module "$m"; done; mute; kill 0' EXIT
+trap 'kill_streams; mute; for m in "${modules[@]}"; do [[ $m ]] && pactl unload-module "$m"; done' EXIT
 
 while true; do
 
@@ -207,6 +207,9 @@ while true; do
             # Note: video+audio together with -re creates audio delay and video lag
             # Two processes, not great solution, but what TODO?
             ffmpeg -re -i "$sel" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+	    # TODO check this
+	    # Sligthly delay audio
+	    sleep 0.5
             PULSE_SINK="virt_cam_media" ffmpeg -i "$sel" -f pulse 'ffcam' 2>&3 & apid=$!
             stream_msg="$(basename "$sel")"
     esac
