@@ -87,6 +87,14 @@ kill_streams()
     stream_msg=
 }
 
+check_mic_usage()
+{
+    if [[ $mic_module || $apid ]]; then
+        if ! pacmd list-source-outputs | grep -Eq 'source: [0-9]+ <virt_mic>'; then
+            zenity --warning --text "The virtual microphone is not used by any programs"
+        fi
+    fi
+}
 
 # Check requirements
 type ffmpeg &>/dev/null || { zenity --error --no-wrap --text "ffmpeg not found"; exit 1; }
@@ -125,38 +133,39 @@ trap 'kill_streams; mute; for m in "${modules[@]}"; do [[ $m ]] && pactl unload-
 
 while true; do
 
-    # First run, when have the right settings, we initialize the virtual camera
+    # First run, when have the right settings, we initialize the virtual camera with a black image
     [[ -z $sel && -c $virtual_cam && $initialized != 1 ]] && sel=BLANK && initialized=1
     
-    # Build a menu
+    # Nothing pre-selected, build a menu
     if [[ -z $sel ]]; then
-    items=()
-    if [[ -c $virtual_cam ]]; then
-        # The first thing we do
-        ((initialized)) || sel=BLANK
-        
-        # Default actions
-        items=("BLANK" "Stream nothing")
-        [[ -c $real_cam ]] && items+=("CAMERA" "Stream webcam")
-        items+=("" "")
-        
-        # List of directory contents
-        items+=(FOLDER "Folder: $dir")
-        if [[ $dir ]]; then
-            for file in "$dir"/*; do
-                [[ -f $file ]] && items+=("$file" "$(basename "$file")")
-            done
+        items=()
+
+        # Actions requiring virtual camera
+        if [[ -c $virtual_cam ]]; then
+            items=(BLANK "Stream nothing")
+            [[ -c $real_cam ]] && items+=(CAMERA "Stream webcam")
+
+            items+=("" "")
+
+            # List of directory contents
+            items+=(FOLDER "Folder: $dir")
+            if [[ $dir ]]; then
+                for file in "$dir"/*; do
+                    [[ -f $file ]] && items+=("$file" "$(basename "$file")")
+                done
+            fi
+
+            items+=("" "")
         fi
-        items+=("" "")
-    fi
-    # Settings
-    items+=(REAL "Webcam: ${real_cam:-NOT SELECTED}"
-            MIC "Mic: ${mic:-NOT SELECTED}"
-            VIRTUAL "Virtual cam: ${virtual_cam:-NOT SELECTED}")
-    
-    sel="$(zenity --list --height=400 --width=400 --title="FFcam" --text="${stream_msg:+Streaming $stream_msg}" --cancel-label="Exit" \
-                  --column={fil,namn} --hide-column=1 --hide-header -- "${items[@]}")" || break
-    
+
+        # Setting actions
+        items+=(REAL "Webcam: ${real_cam:-NOT SELECTED}"
+                MIC "Mic: ${mic:-NOT SELECTED}"
+                VIRTUAL "Virtual cam: ${virtual_cam:-NOT SELECTED}")
+
+        # Show menu
+        sel="$(zenity --list --height=400 --width=400 --title="FFcam" --text="${stream_msg:+Streaming $stream_msg}" --cancel-label="Exit" \
+                      --column={fil,namn} --hide-column=1 --hide-header -- "${items[@]}")" || break
     fi
     
     case "$sel" in
@@ -207,12 +216,15 @@ while true; do
             # Note: video+audio together with -re creates audio delay and video lag
             # Two processes, not great solution, but what TODO?
             ffmpeg -re -i "$sel" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
-	    # TODO check this
-	    # Sligthly delay audio
-	    sleep 0.5
+            # TODO check this
+            # Slightly delay audio
+            sleep 0.5
             PULSE_SINK="virt_cam_media" ffmpeg -i "$sel" -f pulse 'ffcam' 2>&3 & apid=$!
             stream_msg="$(basename "$sel")"
     esac
+
+    # Warn when the virtual mic is active but unused
+    check_mic_usage
 
     sel=
     
