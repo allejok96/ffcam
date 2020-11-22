@@ -1,29 +1,150 @@
 #!/bin/bash
+# ffcam - a simple virtual webcam utility
 
-[[ $1 = --help ]] && exec echo "Virtual webcam media player. Use -v to get verbose output."
-[[ $1 = -v ]] && exec 3>&2 || exec 3>/dev/null
+### Settings
 
-# 16:9
-w=960
-h=540
+w=960; h=540 # 16:9
 fps=30
-
-# ffmpeg video output settings
 flags=(-nostdin)  # allow run in background
-flags+=(-s $w:$h)
-flags+=(-r $fps)
+flags+=(-s "$w:$h")
+flags+=(-r "$fps")
 flags+=(-f v4l2 -vcodec rawvideo -pix_fmt yuv420p)
 flags+=(-vf "scale=w=$w:h=$h:force_original_aspect_ratio=1,pad=$w:$h:(ow-iw)/2:(oh-ih)/2:black")  # filter: scale to fit
 
 
-set_dir()
+### Arguments
+
+[[ $1 = -v ]] && exec 3>&2 || exec 3>/dev/null
+[[ $1 = --help ]] && exec cat<<EOF
+Usage: ffcam [-v]
+Virtual webcam utility.
+
+Arguments:
+  -v        show output from ffmpeg (very cluttered)
+
+Environment variables:
+  DISPLAY     unset to use CLI interface
+  FFCAM_GUI   path to GUI helper program
+EOF
+
+
+### Functions
+
+# Check if a variable is set
+has()
 {
-    new="$(zenity --file-selection --directory "$dir")"
-    [[ $new ]] && dir="$new"
+    [[ $1 && $1 != DISABLED ]]
 }
 
+# Display a warning
+warning()
+{
+    if ((GUI)); then
+        zenity --warning --no-wrap --text "$*"
+    else
+        echo "$*" 1>&2
+    fi
+}
 
-set_cam()  # Args: VARIABLE MESSAGE
+# Wait for user commands, either via readline or GUI, and print to stdout
+main_input()
+{
+    menu=(black splash stream open pause resume mute unmute mic image cam virtual)
+
+    while :; do
+        if [[ $GUI = 1 ]]; then
+            "$FFCAM_GUI"
+            zenity --question --text "Really quit?" && break
+        elif [[ $GUI = 2 ]]; then
+            zenity --list --column=cmd --hide-header --height 400 "${menu[@]}" || { zenity --question --text "Really quit?" && break; }
+        else
+            echo -n '> ' 1>&2
+            read -r || break
+            # Note: exit this thread first, otherwise there's an IO error
+            [[ $REPLY = exit ]] && break
+            printf '%s\n' "$REPLY"
+            sleep 1
+        fi
+    done
+}
+
+# Ask user for file and print to stdout
+# Args: [file]
+select_file()
+{
+    if [[ $1 ]]; then
+        if [[ -e $1 ]]; then
+            printf '%s\n' "$1"
+            return 0
+        else
+            warning "$(realpath "$1"): no such file"
+            return 1
+        fi
+    elif ((GUI)); then
+        file="$(zenity --file-selection --filename "${dir:-.}/")"
+        [[ $file ]] || return 1
+        printf '%s\n' "$file"
+        return 0
+    else
+        warning "please specify file"
+        return 1
+    fi
+}
+
+# Ask user for file (optional), and play file
+# Args: [file] [position]
+open_media()
+{
+    file="$(select_file "$1")" || return
+    dir="$(dirname "$file")"
+
+    # Pause/resume timer
+    #
+    # playing_file: currently playing (or paused) media
+    # playing_start: timestamp when playback was started
+    # playing_stop: timestamp when playback was paused
+    #
+    # The timer gets (re)set when new files are started
+    #
+    # When resuming, the time difference is calculated and
+    # send to this function as $2
+    #
+    # The starting postion is subtracted from the start timestamp
+    # so the position is correct when pausing multiple times
+    #
+    playing_start=$(( $(date '+%s') - ${2:-0} ))
+    playing_stop=
+    playing_file="$file"
+
+    case "$file" in
+        *.jpg|*.png)
+            kill_streams; unmute
+            playing_start=  # images cannot be paused
+            ffmpeg -re -loop 1 -i "$file" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            ;;
+
+        *.mp3)
+            kill_streams --no-store-pos; mute
+            ffmpeg -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            PULSE_SINK="virt_cam_media" ffmpeg -i "$file" -f pulse 'ffcam' 2>&3 & apid=$!
+            ;;
+
+        *)
+            kill_streams --no-store-pos; mute
+            # https://github.com/umlaeute/v4l2loopback/wiki/FFmpeg
+            # Note: video+audio together with -re creates audio delay and video lag
+            # Two processes, not great solution, but what TODO?
+            ffmpeg -re ${2:+-ss $2} -i "$file" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            # TODO check this
+            # Slightly delay audio
+            sleep 0.5
+            PULSE_SINK="virt_cam_media" ffmpeg ${2:+-ss $2} -i "$file" -f pulse 'ffcam' 2>&3 & apid=$!
+    esac
+}
+
+# Camera selection GUI, saves selection to VARIABLE
+# Args: VARIABLE MESSAGE
+cam_dialog()
 {
     # Get contents of variable $1
     current="$(eval "echo \"\$$1\"")"
@@ -31,7 +152,7 @@ set_cam()  # Args: VARIABLE MESSAGE
     items=()
     for device in DISABLED /dev/video*; do
         # Preselect the current device
-        [[ $device = "$current" ]] && items+=(true) || items+=(false)
+        [[ $device = "${current:-DISABLED}" ]] && items+=(true) || items+=(false)
         [[ $device = DISABLED ]] && items+=("DISABLED" "No camera") && continue
         [[ -c $device ]] || continue
         items+=("$device")
@@ -45,14 +166,20 @@ set_cam()  # Args: VARIABLE MESSAGE
     [[ $new ]] && eval "$1=\"$new\""
 }
 
+# Print a list of sound sources
+list_mics()
+{
+    pacmd list-sources | sed -En 's/^[\t ]*name: <(.*)>/\1/p'
+}
 
-set_mic()
+# Microphone selection GUI, sets the mic= variable
+mic_dialog()
 {
     items=()
     # Get ALSA device names
-    for device in DISABLED $(pacmd list-sources | sed -En 's/^[\t ]*name: <(.*)>/\1/p'); do
+    for device in DISABLED $(list_mics); do
         # Preselect the current device
-        [[ $device = "$mic" ]] && items+=(true) || items+=(false)
+        [[ $device = "${mic:-DISABLED}" ]] && items+=(true) || items+=(false)
         [[ $device = DISABLED ]] && items+=(DISABLED "No microphone") && continue
         items+=("$device")
         # Get input device description
@@ -65,41 +192,75 @@ set_mic()
     [[ $new ]] && mic="$new"
 }
 
+# Connect mic to virtual mic
 unmute()
 {
-    # Connect real mic to virtual mic
     [[ $mic_module ]] && return
-    [[ -n $mic && $mic != DISABLED ]] && mic_module="$(pactl load-module module-loopback source="$mic" sink="virt_cam" latency_msec=1)"
+    has "$mic" && mic_module="$(pactl load-module module-loopback source="$mic" sink="virt_cam" latency_msec=1)"
 }
 
+# Disconnect mic from virtual mic
 mute()
 {
-    # Disconnect mic
     [[ $mic_module ]] && pactl unload-module "$mic_module"
     mic_module=
 }
 
+# Kill all ffmpeg streams, optionally saving playback position
+# Args: [--no-store-pos]
 kill_streams()
 {
     [[ $vpid ]] && kill $vpid 2>/dev/null
     [[ $apid  ]] && kill $apid 2>/dev/null
     camera_active=0
-    stream_msg=
+    # Store position of playing media
+    [[ -z $1 && $playing_file && $playing_start && -z $playing_stop ]] && playing_stop=$(date '+%s') 
 }
 
+# Display a warning if the virtual microphone is unused
 check_mic_usage()
 {
     if [[ $mic_module || $apid ]]; then
         if ! pacmd list-source-outputs | grep -Eq 'source: [0-9]+ <virt_mic>'; then
-            zenity --warning --text "The virtual microphone is not used by any programs"
+            warning "the virtual microphone is not used by any programs"
         fi
     fi
 }
 
-# Check requirements
-type ffmpeg &>/dev/null || { zenity --error --no-wrap --text "ffmpeg not found"; exit 1; }
-lsmod | grep -q 'v4l2loopback\>' || zenity --warning --no-wrap --text "v4l2loopback driver is not loaded"
+# Display a warning if virtual camera is not set
+check_virtual_cam()
+{
+    has "$virtual_cam" || { warning "no virtual camera device selected"; return 1; }
+}
 
+# Send black image
+stream_blank()
+{
+    # https://video.stackexchange.com/questions/29527/ffmpeg-create-a-black-background-video-from-audio-for-youtube-upload
+    ffmpeg -re -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+}
+
+
+### Setup
+
+# Check requirements
+type ffmpeg &>/dev/null || { warning "ffmpeg not found"; exit 1; }
+lsmod | grep -q 'v4l2loopback\>' || warning "v4l2loopback driver is not loaded"
+
+# Check for GUI/CLI
+[[ $FFCAM_GUI ]] || FFCAM_GUI="$(dirname "$0")/ffcam-gui"
+if [[ -z $DISPLAY ]]; then
+    GUI=0
+elif ! type zenity &>/dev/null; then
+    echo "cannot find zenity, falling back to CLI interface"
+    GUI=0
+elif ! type "$FFCAM_GUI" &>/dev/null; then
+    echo "cannot find $FFCAM_GUI, falling back to CLI interface"
+    echo "try setting the environment variable FFCAM_GUI"
+    GUI=2
+else
+    GUI=1
+fi
 
 # Read config
 [[ -f ~/.ffcam ]] && source ~/.ffcam
@@ -107,11 +268,11 @@ lsmod | grep -q 'v4l2loopback\>' || zenity --warning --no-wrap --text "v4l2loopb
 mic_old="$mic"
 virtual_cam_old="$virtual_cam"
 real_cam_old="$real_cam"
-dir_old="$dir"
+
 # Remove incorrect values
 [[ $mic = DISABLED ]] || ([[ $mic ]] && pacmd list-sources | grep -q "$mic") || mic=
-[[ $virtual_cam = DISABLED || -c $virtual_cam ]] || virtual_cam=
 [[ $real_cam = DISABLED || -c $real_cam ]] || real_cam=
+[[ -c $virtual_cam ]] || virtual_cam=
 [[ -e $dir ]] || dir=
 
 # PulseAudio setup (store a list of module numbers, outputed by pactl)
@@ -131,108 +292,166 @@ modules=($(
 # Unload modules and kill all child processes before exiting
 trap 'kill_streams; mute; for m in "${modules[@]}"; do [[ $m ]] && pactl unload-module "$m"; done' EXIT
 
-while true; do
+# Initiate the stream
+has "$virtual_cam" && stream_blank
 
-    # First run, when have the right settings, we initialize the virtual camera with a black image
-    [[ -z $sel && -c $virtual_cam && $initialized != 1 ]] && sel=BLANK && initialized=1
-    
-    # Nothing pre-selected, build a menu
-    if [[ -z $sel ]]; then
-        items=()
 
-        # Actions requiring virtual camera
-        if [[ -c $virtual_cam ]]; then
-            items=(BLANK "Stream nothing")
-            [[ -c $real_cam ]] && items+=(CAMERA "Stream webcam")
+### Main loop
 
-            items+=("" "")
+((GUI)) || echo "Welcome to ffcam. Type ? for help"
 
-            # List of directory contents
-            items+=(FOLDER "Folder: $dir")
-            if [[ $dir ]]; then
-                for file in "$dir"/*; do
-                    [[ -f $file ]] && items+=("$file" "$(basename "$file")")
-                done
-            fi
-
-            items+=("" "")
-        fi
-
-        # Setting actions
-        items+=(REAL "Webcam: ${real_cam:-NOT SELECTED}"
-                MIC "Mic: ${mic:-NOT SELECTED}"
-                VIRTUAL "Virtual cam: ${virtual_cam:-NOT SELECTED}")
-
-        # Show menu
-        sel="$(zenity --list --height=400 --width=400 --title="FFcam" --text="${stream_msg:+Streaming $stream_msg}" --cancel-label="Exit" \
-                      --column={fil,namn} --hide-column=1 --hide-header -- "${items[@]}")" || break
-    fi
-    
-    case "$sel" in
-        '') continue ;;
-
-        FOLDER) set_dir ;;
-
-        # Change mic and reconnect if active
-        MIC) set_mic && [[ $mic_module ]] && { mute; unmute; } ;;
-
-        # Change virtual cam and close streams
-        VIRTUAL) set_cam virtual_cam "Select virtual camera device" && sel=BLANK && continue ;;
-
-        # Change webcam and reconnect if active
-        REAL) set_cam real_cam "Select webcam device" && ((camera_active)) && sel=CAMERA && continue ;;
-
-        BLANK)
-            kill_streams; mute
-            # Send black image
-            # https://video.stackexchange.com/questions/29527/ffmpeg-create-a-black-background-video-from-audio-for-youtube-upload
-            ffmpeg -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
-            stream_msg="nothing"
+while read -r cmd arg; do
+    case "$cmd" in
+        \?)
+            cat<<EOF
+Available commands:
+status         Show some runtime info
+mute           Microphone off
+unmute         Microphone on
+black          Stream a black image (mute)
+splash         Stream a splash screen (unmute)
+stream         Stream webcam (unmute)
+open [file]    Stream a media file (video->mute, image->unmute)
+pause          Pause media playback
+resume         Resume media playback
+image [file]   Set splash image
+mic [dev]      Set microphone
+cam [dev]      Set webcam
+virtual [dev]  Set virtual camera device
+exit           Kill streams and exit
+EOF
             ;;
-    
-        CAMERA)
+        
+        mic)
+            if [[ $arg ]]; then
+                mic="$arg"
+            elif ((GUI)); then
+                mic_dialog
+            else
+                echo "available microphones:"
+                list_mics
+            fi
+            # Reconnect if in use
+            [[ $mic_module ]] && { mute; unmute; }
+            ;;
+
+        virtual)
+            if [[ $arg ]]; then
+                virtual_cam="$arg"
+            elif ((GUI)); then
+                cam_dialog virtual_cam "Select virtual camera device" || continue
+            else
+                echo "available cameras:"
+                ls -1 /dev/video*
+                continue
+            fi
+            # Kill video and re-initiate stream
+            kill_streams; mute; stream_blank
+            ;;
+
+        cam)
+            if [[ $arg ]]; then
+                real_cam="$arg"
+            elif ((GUI)); then
+                cam_dialog real_cam "Select webcam device" || continue
+            else
+                echo "available cameras:"
+                ls -1 /dev/video*
+                continue
+            fi
+            # Kill camera if in use
+            ((camera_active)) && { kill_streams; mute; stream_blank; }
+            ;;
+
+        image)
+            # Note: only save path if valid
+            file="$(select_file "$arg")" && splash="$file"
+            ;;
+
+        unmute) unmute; check_mic_usage ;;
+
+        mute) mute ;;
+
+        black)
+            check_virtual_cam || continue
+            kill_streams
+            mute
+            stream_blank
+            ;;
+
+        splash)
+            check_virtual_cam || continue
+
+            kill_streams; unmute
+            if [[ -e $splash ]]; then
+                ffmpeg -re -loop 1 -i "$splash" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            else
+                stream_blank
+                warning "no splash image selected"
+            fi
+            ;;
+
+        stream)
+            check_virtual_cam || continue
+            has "$real_cam" || { warning "no camera device selected"; continue; }
+
             kill_streams; unmute
             ffmpeg -i "$real_cam" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
             camera_active=1
-            stream_msg="webcam"
+            check_mic_usage
+            ;;
+
+        open)
+            check_virtual_cam || continue
+            open_media "$arg"
+            check_mic_usage
+            ;;
+
+        pause)
+            # Note: playing_stop is unset during playback...
+            if [[ $playing_file && $playing_start && -z $playing_stop ]]; then
+                # TODO
+                # This stops playback but does not send any image
+                # it will make it impossible to start playback of the
+                # virtual webcam during the period the image is paused
+                kill_streams
+            else
+                warning "nothing to pause"
+            fi
             ;;
             
-        *.jpg|*.png)
-            kill_streams; unmute
-            ffmpeg -re -loop 1 -i "$sel" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
-            stream_msg="$(basename "$sel")"
+        resume)
+            check_virtual_cam || continue
+
+            if [[ $playing_file && $playing_start && $playing_stop ]]; then
+                open_media "$playing_file" $(( playing_stop - playing_start ))
+            else
+                warning "nothing to resume"
+            fi
             ;;
 
-        *.mp3)
-            kill_streams; mute
-            ffmpeg -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
-            PULSE_SINK="virt_cam_media" ffmpeg -i "$sel" -f pulse 'ffcam' 2>&3 & apid=$!
-            stream_msg="$(basename "$sel")"
+        status)
+            [[ $mic_module ]] && echo "microphone is unmuted"
+            ((camera_active)) && echo "webcam is active"
+            [[ $vpid ]] && echo "ffmpeg video PID: $vpid"
+            [[ $apid ]] && echo "ffmpeg audio PID: $apid"
             ;;
 
-        *)
-            kill_streams; mute
-            # https://github.com/umlaeute/v4l2loopback/wiki/FFmpeg
-            # Note: video+audio together with -re creates audio delay and video lag
-            # Two processes, not great solution, but what TODO?
-            ffmpeg -re -i "$sel" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
-            # TODO check this
-            # Slightly delay audio
-            sleep 0.5
-            PULSE_SINK="virt_cam_media" ffmpeg -i "$sel" -f pulse 'ffcam' 2>&3 & apid=$!
-            stream_msg="$(basename "$sel")"
-    esac
+        *) warning "$cmd: unknown command" ;;
 
-    # Warn when the virtual mic is active but unused
-    check_mic_usage
-
-    sel=
+    esac 
     
-done
+done < <(main_input)
+
+
+### Before exit
 
 # Save config (use old values for the undefined)
 [[ $virtual_cam ]] || virtual_cam="$virtual_cam_old"
 [[ $real_cam ]] || real_cam="$real_cam_old"
 [[ $mic ]] || mic="$mic_old"
-[[ $dir ]] || dir="$dir_old"
-declare -p virtual_cam real_cam mic dir > ~/.ffcam
+declare -p virtual_cam real_cam mic dir splash > ~/.ffcam
+
+# Cleanup is handled by trap
+
+#EOF
