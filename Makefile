@@ -3,10 +3,10 @@ LIBS:= $(shell pkg-config --libs gtk+-3.0)
 
 .PHONY: all clean
 
-all: ffcam-gui-helper
+all: ffcam-gui
 
-ffcam-gui-helper:
+ffcam-gui: gui.c
 	gcc $(CFLAGS) -o ffcam-gui gui.c $(LIBS)
 
 clean:
-	-rm ffcam-gui-helper
+	-rm ffcam-gui
