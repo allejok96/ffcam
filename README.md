@@ -17,20 +17,23 @@ I finally came up a solution using FFmpeg and PulseAudio, and wrapped it in this
 The one problem with this solution is that video and audio playback happens in separate processes. In my testing on a good computer, this has been no problem. In fact it's been the most reliable solution I've found, which tells you smoething about the state of virtual webcam software on Linux...
 
 ## Preparation
+
 ```sh
-# Install requirements
-sudo apt-get install ffmpeg v4l2-loopback-dkms zenity libgtk-3-dev gcc make
+# Basic requirements (no GUI)
+sudo apt-get install  --no-install-recommends ffmpeg v4l2loopback-dkms
 
-# Load virtual webcam driver for now
-sudo modprobe v4l2-loopback
+# Load driver
+sudo modprobe v4l2loopback
+# Load it on boot
+echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf 
 
-# Configure driver to be loaded on boot
-echo v4l2-loopback | sudo tee /etc/modules-load.d/v4l2-loopback.conf 
-
-# Compile the GUI helper program
+# GUI requirements
+sudo apt-get install  --no-install-recommends v4l-utils zenity libgtk-3-dev gcc make
+# Build GUI
+cd ./ffcam
 make
 
-# System wide installation
+# System-wide installation
 sudo make install
 ```
 
@@ -38,13 +41,11 @@ sudo make install
 
 Run FFcam *before* you start any other software that will use the virtual camera.
 
-> Note: you can run without GUI using `cat | ffcam`
-
 On the first run you have to select your devices.
 
 In the other program (Zoom for example), select "Dummy device" as webcam and "virt_mic" as microphone.
 
-These are the streaming modes you can select:
+Click on one of the buttons to start streaming.
 
 | Button | Video stream | Audio stream |
 |------|--------------|--------------|
