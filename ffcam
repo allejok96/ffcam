@@ -243,24 +243,24 @@ stream_blank()
 
 ### Setup
 
+# Check for GUI/CLI
+[[ $FFCAM_GUI ]] || FFCAM_GUI="$(type -p ffcam-gui)" || FFCAM_GUI="$(dirname "$0")/ffcam-gui"
+
+if [[ -z $DISPLAY || -p /dev/stdin ]]; then
+    GUI=0
+elif ! type zenity &>/dev/null; then
+    warning "zenity not found"
+    exit 1
+elif [[ -e $FFCAM_GUI ]]; then
+    GUI=1
+else
+    GUI=2
+    warning "cannot find ffcam-gui, try setting the environment variable FFCAM_GUI"
+fi
+
 # Check requirements
 type ffmpeg &>/dev/null || { warning "ffmpeg not found"; exit 1; }
 lsmod | grep -q 'v4l2loopback\>' || warning "v4l2loopback driver is not loaded"
-
-# Check for GUI/CLI
-[[ $FFCAM_GUI ]] || FFCAM_GUI="$(dirname "$0")/ffcam-gui"
-if [[ -z $DISPLAY ]]; then
-    GUI=0
-elif ! type zenity &>/dev/null; then
-    echo "cannot find zenity, falling back to CLI interface"
-    GUI=0
-elif ! type "$FFCAM_GUI" &>/dev/null; then
-    echo "cannot find $FFCAM_GUI, falling back to CLI interface"
-    echo "try setting the environment variable FFCAM_GUI"
-    GUI=2
-else
-    GUI=1
-fi
 
 # Read config
 [[ -f ~/.ffcam ]] && source ~/.ffcam
