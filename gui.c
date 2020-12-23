@@ -1,20 +1,10 @@
-// Taken from the docs at gtk.org
-
+// https://developer.gnome.org/gtk3/stable/gtk-getting-started.html
 #include <gtk/gtk.h>
 
-GtkWidget *muteButton;
-GtkWidget *unmuteButton;
-
-static void print (GtkWidget *widget, gpointer data)
+static void print (GtkWidget *widget, gpointer   data)
 {
   g_print (data);
   g_print ("\n");
-}
-
-static void set_mute (GtkWidget *widget, gpointer data)
-{
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(muteButton), data)
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(muteButton), ! data)
 }
 
 static GtkWidget* new_button (gchar *label, gchar *output)
@@ -22,6 +12,7 @@ static GtkWidget* new_button (gchar *label, gchar *output)
   GtkWidget *button;
   button = gtk_button_new_with_label (label);
   g_signal_connect (button, "clicked", G_CALLBACK (print), output);
+  return button;
 }
 
 static void activate (GtkApplication *app, gpointer user_data)
@@ -36,33 +27,16 @@ static void activate (GtkApplication *app, gpointer user_data)
   grid = gtk_grid_new ();
   gtk_container_add (GTK_CONTAINER (window), grid);
 
-  muteButton = gtk_toggle_button_new_with_label("Mute");
-  unmuteButton = gtk_toggle_button_new_with_label("Unmute");
-  g_signal_connect (muteButton, "clicked", G_CALLBACK (print), "mute");
-  g_signal_connect (unmuteButton, "clicked", G_CALLBACK (print), "unmute");
-  g_object_bind_property (G_OBJECT(muteButton), "active", G_OBJECT(unmuteButton), "active", G_BINDING_INVERT_BOOLEAN);
-  g_object_bind_property (G_OBJECT(unmuteButton), "active", G_OBJECT(muteButton), "active", G_BINDING_INVERT_BOOLEAN);
+  gtk_grid_attach (GTK_GRID (grid), new_button("Black", "black"),           0,0, 1,1);
+  gtk_grid_attach (GTK_GRID (grid), new_button("Splash", "splash"),         1,0, 1,1);
+  gtk_grid_attach (GTK_GRID (grid), new_button("Webcam", "stream"),         2,0, 1,1);
 
-  GtkWidget *blackButton = new_button("Black", "black");
-  GtkWidget *splashButton = new_button("Splash", "splash");
-  GtkWidget *webcamButton = new_button("Webcam", "stream");
-  GtkWidget *mediaButton = new_button("Media", "open");
-
-  g_signal_connect (blackButton, "clicked", G_CALLBACK (set_mute), TRUE);
-  g_signal_connect (splashButton, "clicked", G_CALLBACK (set_mute), FALSE);
-  g_signal_connect (webcamButton, "clicked", G_CALLBACK (set_mute), FALSE);
-  g_signal_connect (mediaButton, "clicked", G_CALLBACK (set_mute), FALSE);
-
-  gtk_grid_attach (GTK_GRID (grid), blackButton,                            0,0, 1,1);
-  gtk_grid_attach (GTK_GRID (grid), splashButton,                           1,0, 1,1);
-  gtk_grid_attach (GTK_GRID (grid), webcamButton,                           2,0, 1,1);
-
-  gtk_grid_attach (GTK_GRID (grid), mediaButton,                            0,1, 1,1);
+  gtk_grid_attach (GTK_GRID (grid), new_button("Media", "open"),            0,1, 1,1);
   gtk_grid_attach (GTK_GRID (grid), new_button("Pause", "pause"),           1,1, 1,1);
   gtk_grid_attach (GTK_GRID (grid), new_button("Resume", "resume"),         2,1, 1,1);
 
-  gtk_grid_attach (GTK_GRID (grid), muteButton,                             0,2, 1,1);
-  gtk_grid_attach (GTK_GRID (grid), unmuteButton,                           1,2, 1,1);
+  gtk_grid_attach (GTK_GRID (grid), new_button("Mute", "mute"),             0,2, 1,1);
+  gtk_grid_attach (GTK_GRID (grid), new_button("Unmute", "unmute"),         1,2, 1,1);
   gtk_grid_attach (GTK_GRID (grid), new_button("Set mic", "mic"),           2,2, 1,1);
 
   gtk_grid_attach (GTK_GRID (grid), new_button("Set splash", "image"),      0,3, 1,1);
