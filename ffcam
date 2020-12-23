@@ -249,8 +249,8 @@ stream_blank()
 if [[ -z $DISPLAY || -p /dev/stdin ]]; then
     GUI=0
 elif ! type zenity &>/dev/null; then
-    warning "zenity not found"
-    exit 1
+    GUI=0
+    warning "zenity not found, falling back to CLI"
 elif [[ -e $FFCAM_GUI ]]; then
     GUI=1
 else
@@ -274,6 +274,7 @@ real_cam_old="$real_cam"
 [[ $real_cam = DISABLED || -c $real_cam ]] || real_cam=
 [[ -c $virtual_cam ]] || virtual_cam=
 [[ -e $dir ]] || dir=
+[[ -e $splash ]] || splash=
 
 # PulseAudio setup (store a list of module numbers, outputed by pactl)
 modules=($(
