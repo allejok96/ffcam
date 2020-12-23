@@ -2,6 +2,8 @@
 
 A very simple virtual webcam utility for Linux.
 
+![screenshot](https://user-images.githubusercontent.com/7693838/102994393-480c4b00-451f-11eb-80bf-a51e85981960.png)
+
 ## Background
 
 I needed to play videos and display images via a virtual webcam to the Zoom client. There are several other programs out there that can do this, but none of them suited my needs:
@@ -42,9 +44,9 @@ On the first run you have to select your devices.
 
 In the other program (Zoom for example), select "Dummy device" as webcam and "virt_mic" as microphone.
 
-### Streaming modes
+These are the streaming modes you can select:
 
-| Mode | Video stream | Audio stream |
+| Button | Video stream | Audio stream |
 |------|--------------|--------------|
 | Black | - | - |
 | Splash | preset image | mic |
