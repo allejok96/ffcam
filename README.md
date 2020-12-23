@@ -14,7 +14,7 @@ I needed to play videos and display images via a virtual webcam to the Zoom clie
 
 I finally came up a solution using FFmpeg and PulseAudio, and wrapped it in this little bash script.
 
-The one problem with this solution is that video and audio playback happens in separate processes. In my testing on a good computer, this has been no problem. In fact it's been the most reliable solution I've found, which tells you smoething about the state of virtual webcam software on Linux...
+The one problem with this solution is that video and audio playback happens in separate processes. In my testing on a good computer, this has been no problem. In fact it's been the most reliable solution I've found, which tells you something about the state of virtual webcam software on Linux...
 
 ## Preparation
 
