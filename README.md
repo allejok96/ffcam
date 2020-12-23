@@ -1,45 +1,54 @@
 # FFcam
 
-A very simple virtual webcam utility.
+A very simple virtual webcam utility for Linux.
 
-![Screenshot](https://user-images.githubusercontent.com/7693838/93712357-bd9a0100-fb55-11ea-93fe-3069e622d135.png)
+## Background
 
 I needed to play videos and display images via a virtual webcam to the Zoom client. There are several other programs out there that can do this, but none of them suited my needs:
 - ManyCam: not for Linux
 - Webcamoid: unreliable
 - OBS Studio: needs lots of preparation
-- ... and getting audio is super complicated
+- ...all of the above: getting audio is super complicated
 
 I finally came up a solution using FFmpeg and PulseAudio, and wrapped it in this little bash script.
 
-### Usage
+The one problem with this solution is that video and audio playback happens in separate processes. In my testing on a good computer, this has been no problem. In fact it's been the most reliable solution I've found, which tells you smoething about the state of virtual webcam software on Linux...
 
-First, make sure you have loaded the `v4l2-loopback` driver.
+## Preparation
+```sh
+# Install requirements
+sudo apt-get install ffmpeg v4l2-loopback-dkms zenity libgtk-3-dev gcc make
 
-Then start FFcam and select your devices.
+# Load virtual webcam driver for now
+sudo modprobe v4l2-loopback
 
-There are currently 5 modes of streaming:
+# Configure driver to be loaded on boot
+echo v4l2-loopback | sudo tee /etc/modules-load.d/v4l2-loopback.conf 
 
-- Black picture
-- Webcam and microphone
-- Static image and microphone
-- Audio
-- Video
+# Compile the GUI helper program
+make
 
-In another program, like Zoom, select "Dummy device" as webcam and "virt_mic" as microphone. You have to start FFcam *before* you start the other program.
+# System wide installation
+sudo make install
+```
 
-### Quirks
+## Usage
 
-- After every selection the window closes and re-opens.
-- There is no playback control for media.
-- Everything except jpg, png and mp3 is treated as a video.
-- Video and audio playback happens in separate processes, so beware of A/V sync issues. (But so far it's the most reliable solution I've found)
-- Run with `-v` to see output from ffmpeg, but it will be a mixed up mess, since there may be two processes in parallel.
+Run FFcam *before* you start any other software that will use the virtual camera.
 
-### Dependencies
+> Note: you can run without GUI using `cat | ffcam`
 
-- bash
-- ffmpeg
-- v4l2-loopback
-- pulseaudio
-- zenity
+On the first run you have to select your devices.
+
+In the other program (Zoom for example), select "Dummy device" as webcam and "virt_mic" as microphone.
+
+### Streaming modes
+
+| Mode | Video stream | Audio stream |
+|------|--------------|--------------|
+| Black | - | - |
+| Splash | preset image | mic |
+| Webcam | webcam | mic |
+| Media | jpg/png | mic |
+| Media | - | mp3 |
+| Media | video | audio |
