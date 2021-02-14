@@ -49,19 +49,18 @@ warning()
 # Wait for user commands, either via readline or GUI, and print to stdout
 main_input()
 {
-    while :; do
-        if ((GUI)); then
-            "$FFCAM_GUI"
-            zenity --question --text "Really quit?" && break
-        else
+    if ((GUI)); then
+        "$FFCAM_GUI"
+    else    
+        while :; do
             echo -n '> ' 1>&2
             read -r || break
             # Note: exit this thread first, otherwise there's an IO error
             [[ $REPLY = exit ]] && break
             printf '%s\n' "$REPLY"
             sleep 1
-        fi
-    done
+        done
+    fi
 }
 
 # Ask user for file and print to stdout
