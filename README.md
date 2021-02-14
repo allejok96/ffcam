@@ -2,7 +2,7 @@
 
 A very simple virtual webcam utility for Linux.
 
-![screenshot](https://user-images.githubusercontent.com/7693838/102994393-480c4b00-451f-11eb-80bf-a51e85981960.png)
+![screenshot](https://user-images.githubusercontent.com/7693838/107879831-80a32200-6edb-11eb-9591-b4cbe5b01545.png)
 
 ## Background
 
@@ -19,7 +19,7 @@ The one problem with this solution is that video and audio playback happens in s
 ## Preparation
 
 ```sh
-# Basic requirements (no GUI)
+# Install basic requirements (no GUI)
 sudo apt-get install  --no-install-recommends ffmpeg v4l2loopback-dkms
 
 # Load driver
@@ -27,11 +27,14 @@ sudo modprobe v4l2loopback
 # Load it on boot
 echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf 
 
-# GUI requirements
+# Install GUI requirements
 sudo apt-get install  --no-install-recommends v4l-utils zenity libgtk-3-dev gcc make
 # Build GUI
 cd ./ffcam
 make
+
+# Optional for screenshot feature
+sudo apt-get install gnome-screenshot
 
 # System-wide installation
 sudo make install
@@ -41,7 +44,7 @@ sudo make install
 
 Run FFcam *before* you start any other software that will use the virtual camera.
 
-On the first run you have to select your devices.
+On the first run you have to go to Settings and select your devices.
 
 In the other program (Zoom for example), select "Dummy device" as webcam and "virt_mic" as microphone.
 
@@ -50,8 +53,10 @@ Click on one of the buttons to start streaming.
 | Button | Video stream | Audio stream |
 |------|--------------|--------------|
 | Black | - | - |
-| Splash | preset image | mic |
+| Splash screen | preset image | mic |
 | Webcam | webcam | mic |
 | Media | jpg/png | mic |
 | Media | - | mp3 |
 | Media | video | audio |
+| Screenshot | image | mic |
+| Screencast | desktop | mic |
