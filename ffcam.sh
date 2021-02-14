@@ -49,14 +49,10 @@ warning()
 # Wait for user commands, either via readline or GUI, and print to stdout
 main_input()
 {
-    menu=(black splash stream open pause resume mute unmute mic image cam virtual)
-
     while :; do
-        if [[ $GUI = 1 ]]; then
+        if ((GUI)); then
             "$FFCAM_GUI"
             zenity --question --text "Really quit?" && break
-        elif [[ $GUI = 2 ]]; then
-            zenity --list --column=cmd --hide-header --height 400 "${menu[@]}" || { zenity --question --text "Really quit?" && break; }
         else
             echo -n '> ' 1>&2
             read -r || break
@@ -271,18 +267,14 @@ cleanup()
 ### Setup
 
 # Check for GUI/CLI
-[[ $FFCAM_GUI ]] || FFCAM_GUI="$(type -p ffcam-gui)" || FFCAM_GUI="$(dirname "$0")/ffcam-gui"
-
 if [[ -z $DISPLAY || -p /dev/stdin ]]; then
     GUI=0
-elif ! type zenity &>/dev/null; then
-    GUI=0
-    warning "zenity not found, falling back to CLI"
-elif [[ -e $FFCAM_GUI ]]; then
-    GUI=1
 else
-    GUI=2
-    warning "cannot find ffcam-gui, try setting the environment variable FFCAM_GUI"
+    type zenity &>/dev/null || { warning "zenity not found"; exit 1; }
+    GUI=1
+    
+    [[ $FFCAM_GUI ]] || FFCAM_GUI="$(type -p ffcam-gui)" || FFCAM_GUI="$(dirname "$0")/ffcam-gui"
+    [[ -e $FFCAM_GUI ]] || { warning "cannot find ffcam-gui, try setting the environment variable FFCAM_GUI"; exit 1; }
 fi
 
 # Check requirements
