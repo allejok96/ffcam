@@ -2,13 +2,36 @@
 #include <gtk-3.0/gtk/gtk.h>
 
 
-static void print (GtkWidget *widget,
-                   gpointer   data)
+static void print (GtkWidget * widget,
+                   gpointer data)
 {
   g_print (data);
   g_print ("\n");
 }
 
+static void close_window (GtkWidget * widget,
+                          gpointer window)
+{
+  gtk_widget_destroy (GTK_WIDGET (window));
+}
+
+
+static void on_button_press (GtkWidget * widget,
+                             GdkEventButton * event,
+                             gpointer data)
+{
+  if (event->type == GDK_BUTTON_PRESS)
+    {
+      if (event->button == 1)
+        {
+          gtk_window_begin_move_drag (GTK_WINDOW (gtk_widget_get_toplevel(widget)),
+                                      event->button,
+                                      event->x_root,
+                                      event->y_root,
+                                      event->time);
+        }
+    }
+}
 
 static void add_button (GtkWidget * box,
                         gchar * label,
@@ -56,15 +79,22 @@ static void activate (GtkApplication *app, gpointer user_data)
 {
   GtkWidget * window;
   GtkWidget * box;
+  GtkWidget * handle;
   GtkWidget * menuButton;
   GtkWidget * menu;
   GtkWidget * settingsItem;
   GtkWidget * settingsMenu;
+  GtkWidget * exitItem;
 
   // Main window
   window = gtk_application_window_new (app);
   gtk_window_set_title (GTK_WINDOW (window), "FFcam");
   gtk_window_set_keep_above (GTK_WINDOW (window), TRUE);
+  gtk_window_set_decorated (GTK_WINDOW (window), FALSE);
+  gtk_window_set_position (GTK_WINDOW (window), GTK_WIN_POS_CENTER_ALWAYS);
+  // Capture button press events
+  gtk_widget_add_events (window, GDK_BUTTON_PRESS_MASK);
+  g_signal_connect (window, "button-press-event", G_CALLBACK (on_button_press), NULL);
 
   // Settings submenu
   settingsMenu = gtk_menu_new ();
@@ -85,9 +115,16 @@ static void activate (GtkApplication *app, gpointer user_data)
   add_item (menu, NULL, NULL);
   settingsItem = add_item (menu, "Settings", NULL);
   gtk_menu_item_set_submenu (GTK_MENU_ITEM (settingsItem), settingsMenu);
+  add_item (menu, NULL, NULL);
+  exitItem = add_item (menu, "Exit", NULL);
+  g_signal_connect (exitItem, "activate", G_CALLBACK (close_window), window);
+  
 
   // Main window container
   box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  // Window move handle
+  handle = gtk_image_new_from_icon_name ("list-drag-handle-symbolic", GTK_ICON_SIZE_BUTTON);
+  gtk_box_pack_start (GTK_BOX (box), handle, FALSE, FALSE, 0);
   add_button (box, "Black", "black", "view-conceal-symbolic");
   add_button (box, "Webcam", "stream", "camera-web-symbolic");
   add_button (box, "Splash screen", "splash", "preferences-desktop-wallpaper-symbolic");
