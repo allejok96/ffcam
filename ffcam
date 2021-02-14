@@ -92,11 +92,13 @@ select_file()
 }
 
 # Ask user for file (optional), and play file
-# Args: [file] [position]
+# Args: [--temp] [file] [position]
 open_media()
 {
+    [[ $1 == --temp ]] && local temp=1 && shift
+
     file="$(select_file "$1")" || return
-    dir="$(dirname "$file")"
+    ! ((temp)) && dir="$(dirname "$file")"
 
     # Pause/resume timer
     #
@@ -140,6 +142,8 @@ open_media()
             sleep 0.5
             PULSE_SINK="virt_cam_media" ffmpeg ${2:+-ss $2} -i "$file" -f pulse 'ffcam' 2>&3 & apid=$!
     esac
+
+    check_mic_usage
 }
 
 # Camera selection GUI, saves selection to VARIABLE
@@ -206,12 +210,18 @@ mute()
     mic_module=
 }
 
+kill_preview()
+{
+    [[ $spid ]] && kill $spid 2>/dev/null
+    [[ $ppid && $1 == all ]] && kill $ppid 2>/dev/null
+}
+
 # Kill all ffmpeg streams, optionally saving playback position
 # Args: [--no-store-pos]
 kill_streams()
 {
-    [[ $vpid ]] && kill $vpid 2>/dev/null
-    [[ $apid  ]] && kill $apid 2>/dev/null
+    [[ $vpid ]] && kill $vpid 2>/dev/null && vpid=
+    [[ $apid ]] && kill $apid 2>/dev/null && apid=
     camera_active=0
     # Store position of playing media
     [[ -z $1 && $playing_file && $playing_start && -z $playing_stop ]] && playing_stop=$(date '+%s') 
@@ -222,7 +232,7 @@ check_mic_usage()
 {
     if [[ $mic_module || $apid ]]; then
         if ! pacmd list-source-outputs | grep -Eq 'source: [0-9]+ <virt_mic>'; then
-            warning "the virtual microphone is not used by any programs"
+            warning "the virtual microphone is not used by any programs" &
         fi
     fi
 }
@@ -230,7 +240,7 @@ check_mic_usage()
 # Display a warning if virtual camera is not set
 check_virtual_cam()
 {
-    has "$virtual_cam" || { warning "no virtual camera device selected"; return 1; }
+    has "$virtual_cam" || { warning "no virtual camera device selected" & return 1; }
 }
 
 # Send black image
@@ -238,6 +248,23 @@ stream_blank()
 {
     # https://video.stackexchange.com/questions/29527/ffmpeg-create-a-black-background-video-from-audio-for-youtube-upload
     ffmpeg -re -f lavfi -i "color=c=black:s=10x10:r=1" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+}
+
+# Exit trap
+cleanup()
+{
+    # Kill ffplay before streams
+    [[ $spid ]] && kill $spid 2>/dev/null  # webcam preview
+    [[ $ppid ]] && kill $ppid 2>/dev/null  # virtual cam preview
+
+    # Kill ffmpeg streams
+    kill_streams
+
+    # Unload pulseaudio modules
+    mute
+    for m in "${modules[@]}"; do
+        [[ $m ]] && pactl unload-module "$m"
+    done
 }
 
 
@@ -290,8 +317,7 @@ modules=($(
     pactl load-module module-loopback source="virt_cam_media.monitor" sink="virt_cam" latency_msec=1
 ))
 
-# Unload modules and kill all child processes before exiting
-trap 'kill_streams; mute; for m in "${modules[@]}"; do [[ $m ]] && pactl unload-module "$m"; done' EXIT
+trap cleanup EXIT
 
 # Initiate the stream
 has "$virtual_cam" && stream_blank
@@ -307,18 +333,23 @@ while read -r cmd arg; do
             cat<<EOF
 Available commands:
 status         Show some runtime info
-mute           Microphone off
-unmute         Microphone on
+mute           Microphone temporarily off
+unmute         Microphone temporarily on
 black          Stream a black image (mute)
 splash         Stream a splash screen (unmute)
 stream         Stream webcam (unmute)
-open [file]    Stream a media file (video->mute, image->unmute)
+screen         Stream screen (unmute)
+screenshot     Grab an area of the screen and stream it (unmute)
+open [file]    Stream a media file (audio/video=mute, image=unmute)
 pause          Pause media playback
 resume         Resume media playback
+self           Open a window showing webcam stream
+preview        Open a window showing output stream
 image [file]   Set splash image
 mic [dev]      Set microphone
 cam [dev]      Set webcam
 virtual [dev]  Set virtual camera device
+status         Show some info
 exit           Kill streams and exit
 EOF
             ;;
@@ -388,24 +419,60 @@ EOF
                 ffmpeg -re -loop 1 -i "$splash" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
             else
                 stream_blank
-                warning "no splash image selected"
+                warning "no splash image selected" &
             fi
             ;;
 
         stream)
             check_virtual_cam || continue
-            has "$real_cam" || { warning "no camera device selected"; continue; }
+            has "$real_cam" || { warning "no camera device selected" & continue; }
 
             kill_streams; unmute
+            [[ $spid ]] && kill $spid 2>/dev/null && spid= && sleep 1  # webcam preview
+            
             ffmpeg -i "$real_cam" "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
             camera_active=1
             check_mic_usage
             ;;
 
+        screen)
+            check_virtual_cam || continue
+            kill_streams cam; unmute
+            ffmpeg -f x11grab -i :0.0 "${flags[@]}" "$virtual_cam" 2>&3 & vpid=$!
+            check_mic_usage
+            ;;
+
+        screenshot)
+            check_virtual_cam || continue
+            type -p gnome-screenshot >/dev/null ||  { warning "gnome-screenshot is not installed" & continue; }
+
+            mkdir -p /tmp/ffcam
+            img="$(mktemp -u /tmp/ffcam/XXXX.png)"
+            gnome-screenshot --area --file="$img" || { warning "failed to take screenshot" & continue; }
+            # Needs to sleep a short while before trying to open
+            sleep 1
+            open_media --temp "$img"
+            ;;
+
+        self)
+            check_virtual_cam || continue
+            if ((camera_active)); then
+                warning "webcam is currently in use"
+            else
+                [[ $spid ]] && kill $spid 2>/dev/null
+                ffplay -alwaysontop -window_title "Webcamera" -x 320 -y 180 "$real_cam" 2>&3 & spid=$!
+            fi
+            ;;
+            
+        preview)
+            check_virtual_cam || continue
+            [[ $ppid ]] && kill $ppid 2>/dev/null
+            ffplay -window_title "Output preview" "$virtual_cam" 2>&3 & ppid=$!
+            ;;
+        
         open)
             check_virtual_cam || continue
             open_media "$arg"
-            check_mic_usage
             ;;
 
         pause)
@@ -420,7 +487,7 @@ EOF
                 warning "nothing to pause"
             fi
             ;;
-            
+
         resume)
             check_virtual_cam || continue
 
