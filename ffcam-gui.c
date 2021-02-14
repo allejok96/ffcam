@@ -92,6 +92,7 @@ static void activate (GtkApplication *app, gpointer user_data)
   gtk_window_set_keep_above (GTK_WINDOW (window), TRUE);
   gtk_window_set_decorated (GTK_WINDOW (window), FALSE);
   gtk_window_set_position (GTK_WINDOW (window), GTK_WIN_POS_CENTER_ALWAYS);
+  gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
   // Capture button press events
   gtk_widget_add_events (window, GDK_BUTTON_PRESS_MASK);
   g_signal_connect (window, "button-press-event", G_CALLBACK (on_button_press), NULL);
